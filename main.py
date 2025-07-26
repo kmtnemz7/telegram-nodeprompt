@@ -1,15 +1,14 @@
-# Replit-optimized version of your Telegram bot
-# Keeps running using Flask + UptimeRobot ping
-
+# Telegram bot using CoinGecko PRO API and Flask keep-alive
 import requests
 import logging
 import asyncio
+from time import time
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from threading import Thread
 from flask import Flask
 
-# === WEB SERVER TO KEEP BOT ALIVE ===
+# === WEB SERVER TO KEEP BOT ALIVE (FOR REPLIT) ===
 app = Flask('')
 
 
@@ -27,17 +26,20 @@ Thread(target=run_web).start()
 # === CONFIG ===
 TOKEN = "8461136691:AAEGSNcXVyFFjlpl6AboAGKl8uhEWi2w3yc"
 COINGECKO_API = "https://api.coingecko.com/api/v3"
+API_KEY = "CG-EJg28u9CCZB4i7aQphoDJQKw"
+HEADERS = {"x-cg-pro-api-key": API_KEY}
+
 logging.basicConfig(level=logging.INFO)
 
 symbol_to_id = {}
 live_tasks = {}
-
 
 # === Load top 50 coins ===
 def load_top_coins():
     global symbol_to_id
     try:
         res = requests.get(f"{COINGECKO_API}/coins/markets",
+                           headers=HEADERS,
                            params={
                                "vs_currency": "usd",
                                "order": "market_cap_desc",
@@ -48,9 +50,9 @@ def load_top_coins():
         res.raise_for_status()
         data = res.json()
         symbol_to_id = {coin["symbol"].lower(): coin["id"] for coin in data}
+        logging.info(f"Loaded symbols: {list(symbol_to_id.keys())[:10]}")
     except Exception as e:
         logging.error(f"Failed to load top coins: {e}")
-
 
 # === /start ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -63,28 +65,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
            "• `/help` – All commands")
     await update.message.reply_text(msg, parse_mode="Markdown")
 
-
 # === /help ===
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await start(update, context)
 
-
 # === /price ===
 async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ Usage: /price [symbol] (e.g. /price btc)")
+        await update.message.reply_text("⚠️ Usage: /price [symbol] (e.g. /price btc)")
         return
 
     symbol = context.args[0].lower()
     coin_id = symbol_to_id.get(symbol)
+
+    if not symbol_to_id:
+        await update.message.reply_text("⚠️ Coin list not loaded yet. Try again shortly.")
+        return
+
     if not coin_id:
-        await update.message.reply_text(f"❌ `{symbol}` not in top 50.",
-                                        parse_mode="Markdown")
+        await update.message.reply_text(f"❌ `{symbol}` not in top 50.", parse_mode="Markdown")
         return
 
     try:
         res = requests.get(f"{COINGECKO_API}/simple/price",
+                           headers=HEADERS,
                            params={
                                "ids": coin_id,
                                "vs_currencies": "usd",
@@ -95,7 +99,7 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data = res.json().get(coin_id)
 
         if not data or 'usd' not in data:
-            raise ValueError("Price data incomplete or unavailable.")
+            raise ValueError("Incomplete data")
 
         price = data['usd']
         market_cap = data.get('usd_market_cap', 0)
@@ -107,16 +111,15 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"• Volume 24h: `${vol_24h:,.0f}`")
 
         await update.message.reply_text(msg, parse_mode="Markdown")
-
     except Exception as e:
         logging.error(f"Price fetch error: {e}")
         await update.message.reply_text("❌ Failed to fetch price data.")
-
 
 # === /top ===
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         res = requests.get(f"{COINGECKO_API}/coins/markets",
+                           headers=HEADERS,
                            params={
                                "vs_currency": "usd",
                                "order": "market_cap_desc",
@@ -130,23 +133,22 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, coin in enumerate(data, 1):
             msg += f"{i}. *{coin['symbol'].upper()}* – ${coin['current_price']:,.2f} ({coin['price_change_percentage_24h']:.2f}%)\n"
         await update.message.reply_text(msg, parse_mode="Markdown")
-    except:
+    except Exception as e:
+        logging.error(f"Top fetch error: {e}")
         await update.message.reply_text("❌ Failed to load top coins.")
-
 
 # === /live ===
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text(
-            "⚠️ Usage: /live [symbol] (e.g. /live btc)")
+        await update.message.reply_text("⚠️ Usage: /live [symbol] (e.g. /live btc)")
         return
 
     user_id = update.effective_user.id
     symbol = context.args[0].lower()
     coin_id = symbol_to_id.get(symbol)
+
     if not coin_id:
-        await update.message.reply_text(f"❌ `{symbol}` not found.",
-                                        parse_mode="Markdown")
+        await update.message.reply_text(f"❌ `{symbol}` not found.", parse_mode="Markdown")
         return
 
     # Cancel previous if running
@@ -157,6 +159,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             for _ in range(10):
                 res = requests.get(f"{COINGECKO_API}/simple/price",
+                                   headers=HEADERS,
                                    params={
                                        "ids": coin_id,
                                        "vs_currencies": "usd"
@@ -170,6 +173,9 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Live updates finished.")
         except asyncio.CancelledError:
             await update.message.reply_text("🛑 Live updates stopped.")
+        except Exception as e:
+            logging.error(f"Live price error: {e}")
+            await update.message.reply_text("❌ Failed during live updates.")
         finally:
             live_tasks.pop(user_id, None)
 
@@ -178,7 +184,6 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📡 Streaming `{symbol}` every 30s. Type /stop to cancel.",
         parse_mode="Markdown")
-
 
 # === /stop ===
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,13 +194,11 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("ℹ️ No live updates running.")
 
-
-# === RUN BOT ===
+# === Startup callback ===
 async def startup(app):
     load_top_coins()
-    logging.info(f"✅ Loaded symbols: {list(symbol_to_id.keys())[:10]}")
 
-
+# === RUN BOT ===
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).post_init(startup).build()
     app.add_handler(CommandHandler("start", start))
@@ -205,4 +208,3 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("live", live))
     app.add_handler(CommandHandler("stop", stop))
     app.run_polling()
-
