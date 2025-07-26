@@ -92,13 +92,24 @@ async def price(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                "include_24hr_vol": "true"
                            })
         res.raise_for_status()
-        data = res.json()[coin_id]
+        data = res.json().get(coin_id)
+
+        if not data or 'usd' not in data:
+            raise ValueError("Price data incomplete or unavailable.")
+
+        price = data['usd']
+        market_cap = data.get('usd_market_cap', 0)
+        vol_24h = data.get('usd_24h_vol', 0)
+
         msg = (f"💸 *{symbol.upper()}*\n"
-               f"• Price: `${data['usd']:,.6f}`\n"
-               f"• Market Cap: `${data['usd_market_cap']:,.0f}`\n"
-               f"• Volume 24h: `${data['usd_24h_vol']:,.0f}`")
+               f"• Price: `${price:,.6f}`\n"
+               f"• Market Cap: `${market_cap:,.0f}`\n"
+               f"• Volume 24h: `${vol_24h:,.0f}`")
+
         await update.message.reply_text(msg, parse_mode="Markdown")
+
     except Exception as e:
+        logging.error(f"Price fetch error: {e}")
         await update.message.reply_text("❌ Failed to fetch price data.")
 
 
