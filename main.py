@@ -191,9 +191,13 @@ async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # === RUN BOT ===
-if __name__ == "__main__":
+async def startup(app):
     load_top_coins()
-    app = ApplicationBuilder().token(TOKEN).build()
+    logging.info(f"✅ Loaded symbols: {list(symbol_to_id.keys())[:10]}")
+
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).post_init(startup).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("price", price))
@@ -201,3 +205,4 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("live", live))
     app.add_handler(CommandHandler("stop", stop))
     app.run_polling()
+
