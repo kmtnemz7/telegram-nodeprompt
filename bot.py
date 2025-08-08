@@ -11,6 +11,100 @@ from threading import Thread
 from flask import Flask
 from io import BytesIO
 
+# DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER
+ ── simple 20s cache so you don't spam the API ───────────────
+_dex_cache = {}  # {address: (ts, data)}
+CACHE_TTL = 20
+
+# Solana base58 (no 0, O, I, l), 32–44 chars
+SOL_CA_RE = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b')
+
+def pick_best_pair(pairs):
+    # prefer solana chain, highest liquidity
+    sol_pairs = [p for p in pairs if p.get("chainId") == "solana"]
+    if not sol_pairs:
+        sol_pairs = pairs
+    return max(sol_pairs, key=lambda p: (p.get("liquidity", {}).get("usd") or 0), default=None)
+
+def get_dexscreener_for(address: str):
+    # cache
+    now = time.time()
+    hit = _dex_cache.get(address)
+    if hit and now - hit[0] < CACHE_TTL:
+        return hit[1]
+
+    url = f"https://api.dexscreener.com/latest/dex/tokens/{address}"
+    r = requests.get(url, timeout=10)
+    if r.status_code != 200:
+        return None
+    data = r.json()
+    _dex_cache[address] = (now, data)
+    return data
+
+def fmt_pct(x):
+    return f"{x:+.2f}%" if isinstance(x, (int, float)) else "—"
+
+def fmt_usd(x, digs=0):
+    try:
+        return f"${float(x):,.{digs}f}"
+    except:
+        return "—"
+
+async def handle_solana_ca(update, context):
+    msg = update.effective_message
+    text = (msg.text or msg.caption or "").strip()
+    if not text:
+        return
+
+    addresses = SOL_CA_RE.findall(text)
+    if not addresses:
+        return
+
+    # Only process the first CA found in the message
+    ca = addresses[0]
+
+    data = get_dexscreener_for(ca)
+    if not data or "pairs" not in data or not data["pairs"]:
+        return await msg.reply_text(f"❌ No DEXScreener data for `{ca}`", parse_mode="Markdown")
+
+    pair = pick_best_pair(data["pairs"])
+    if not pair:
+        return await msg.reply_text(f"❌ No active pairs for `{ca}` on DEXScreener", parse_mode="Markdown")
+
+    base = pair.get("baseToken", {})
+    quote = pair.get("quoteToken", {})
+    price = pair.get("priceUsd")
+    liq = pair.get("liquidity", {}).get("usd")
+    fdv = pair.get("fdv")
+    vol24 = pair.get("volume", {}).get("h24")
+    pc = pair.get("priceChange", {}) or {}
+    mcap = pair.get("marketCap")  # sometimes present
+    dex = pair.get("dexId")
+    chain = pair.get("chainId")
+    url = pair.get("url") or pair.get("pairUrl")
+
+    name = base.get("name") or base.get("symbol") or "Token"
+    symbol = base.get("symbol") or ""
+
+    card = (
+        f"💊 *{name}* ({symbol})\n"
+        f"╰─🧬 *CA* → `{ca}`\n"
+        f"   │\n"
+        f"   💵 *Price*      → {fmt_usd(price, 8)}\n"
+        f"   📈 *FDV*        → {fmt_usd(fdv)}\n"
+        f"   💧 *Liquidity*  → {fmt_usd(liq)}\n"
+        f"   🔊 *Vol 24h*    → {fmt_usd(vol24)}\n"
+        f"   🧭 *Change*     → 1h {fmt_pct(pc.get('h1'))} | 6h {fmt_pct(pc.get('h6'))} | 24h {fmt_pct(pc.get('h24'))}\n"
+        f"   │\n"
+        f"   ⚖️ *DEX*        → {dex or '—'}\n"
+        f"   🌐 *Chain*      → {chain or '—'}\n"
+        f"   🔗 *Link*       → {url or '—'}"
+    )
+
+    await msg.reply_text(card, parse_mode="Markdown")
+
+#END DEX SCREENER END DEX SCREENER END DEX SCREENER
+
 # === WEB SERVER TO KEEP BOT ALIVE ===
 app = Flask('')
 
