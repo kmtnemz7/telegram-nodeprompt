@@ -1,3 +1,4 @@
+import os
 import requests
 import logging
 import asyncio
@@ -23,7 +24,7 @@ def run_web():
 Thread(target=run_web).start()
 
 # === CONFIG ===
-TOKEN = "8461136691:AAEGSNcXVyFFjlpl6AboAGKl8uhEWi2w3yc"
+TOKEN = os.getenv("BOT_TOKEN")
 COINGECKO_API = "https://api.coingecko.com/api/v3"
 COINGECKO_HEADERS = {
     "x-cg-demo-api-key": "CG-EJg28u9CCZB4i7aQphoDJQKw"
