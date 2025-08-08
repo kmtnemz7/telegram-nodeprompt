@@ -12,7 +12,7 @@ from flask import Flask
 from io import BytesIO
 
 # DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER DEX SCREENER
- ── simple 20s cache so you don't spam the API ───────────────
+ #── simple 20s cache so you don't spam the API ───────────────
 _dex_cache = {}  # {address: (ts, data)}
 CACHE_TTL = 20
 
