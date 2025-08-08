@@ -126,14 +126,13 @@ async def chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action("upload_photo")
 
     # === Fetch chart data ===
-    try:
-        url = f"{COINGECKO_API}/coins/{coin_id}/market_chart"
-        params = {
-            "vs_currency": "usd",
-            "days": days,
-            "interval": "daily"
-        }
-        res = requests.get(url, params=params, headers=COINGECKO_HEADERS)
+    url = f"{COINGECKO_API}/coins/{coin_id}/market_chart"
+    params = {
+        "vs_currency": "usd",
+        "days": days,
+        "interval": "daily"
+    }
+    res = requests.get(url, params=params, headers=COINGECKO_HEADERS)
 
     try:
         res = requests.get(url, params=params, headers=COINGECKO_HEADERS)
