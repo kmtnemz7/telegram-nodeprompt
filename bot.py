@@ -5,8 +5,10 @@ import asyncio
 import matplotlib.pyplot as plt
 import datetime
 import requests
+import re
+import time
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from threading import Thread
 from flask import Flask
 from io import BytesIO
