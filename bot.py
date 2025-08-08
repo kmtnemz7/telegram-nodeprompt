@@ -1,12 +1,12 @@
 import os
-import requests
-import logging
-import asyncio
-import matplotlib.pyplot as plt
-import datetime
-import requests
 import re
 import time
+import logging
+import asyncio
+import datetime
+import requests
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from threading import Thread
