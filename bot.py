@@ -72,12 +72,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def fetch_chart_data(coin_id: str, days: int = 30):
     url = f"{COINGECKO_API}/coins/{coin_id}/market_chart"
-params = {
-    "vs_currency": "usd",
-    "days": days,
-    "interval": "daily"
-}
-res = requests.get(url, params=params, headers=COINGECKO_HEADERS)
+    params = {
+        "vs_currency": "usd",
+        "days": days,
+        "interval": "daily"
+    }
+    res = requests.get(url, params=params, headers=COINGECKO_HEADERS)
     if res.status_code != 200:
         return None
     return res.json()
