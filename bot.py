@@ -47,6 +47,12 @@ COINGECKO_HEADERS = {
 symbol_to_id = {}
 live_tasks = {}
 
+# ── 2x tracking config ───────────────────────────────────────────
+TRACK_TASKS = {}   # key: (chat_id, message_id) -> asyncio.Task
+BASELINES   = {}   # key: (chat_id, message_id) -> {"address": str, "baseline": float, "metric": "marketCap"/"fdv"}
+POLL_SECS = 20     # how often to re-check price/MC
+TIMEOUT_SECS = 6 * 60 * 60  # stop watching after 6 hours
+
 # ───────────────────────── DEXScreener helpers ─────────────────────
 # simple 20s cache so you don't spam the API
 _dex_cache = {}  # {address: (ts, data)}
@@ -356,48 +362,110 @@ async def handle_solana_ca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not text:
         return
 
+    # find the first CA in message
     addresses = SOL_CA_RE.findall(text)
     if not addresses:
         return
-
     ca = addresses[0]
+
+    # fetch dexscreener data
     data = get_dexscreener_for(ca)
     if not data or "pairs" not in data or not data["pairs"]:
-        return await say(update, f"❌ No DEXScreener data for `{ca}`", parse_mode="Markdown")
+        return await update.effective_chat.send_message(
+            f"❌ No DEXScreener data for `{ca}`", parse_mode="Markdown"
+        )
 
     pair = pick_best_pair(data["pairs"])
     if not pair:
-        return await say(update, f"❌ No active pairs for `{ca}` on DEXScreener", parse_mode="Markdown")
+        return await update.effective_chat.send_message(
+            f"❌ No active pairs for `{ca}` on DEXScreener", parse_mode="Markdown"
+        )
 
-    base = pair.get("baseToken", {})
-    price = pair.get("priceUsd")
-    liq = pair.get("liquidity", {}).get("usd")
-    fdv = pair.get("fdv")
-    vol24 = pair.get("volume", {}).get("h24")
-    pc = pair.get("priceChange", {}) or {}
-    dex = pair.get("dexId")
-    chain = pair.get("chainId")
-    url = pair.get("url") or pair.get("pairUrl")
-
+    base = pair.get("baseToken", {}) or {}
     name = base.get("name") or base.get("symbol") or "Token"
     symbol = base.get("symbol") or ""
 
-    card = (
-        f"💊 *{name}* ({symbol})\n"
-        f"╰─🧬 *CA* → `{ca}`\n"
-        f"   │\n"
-        f"   💵 *Price*      → {fmt_usd(price, 8)}\n"
-        f"   📈 *FDV*        → {fmt_usd(fdv)}\n"
-        f"   💧 *Liquidity*  → {fmt_usd(liq)}\n"
-        f"   🔊 *Vol 24h*    → {fmt_usd(vol24)}\n"
-        f"   🧭 *Change*     → 1h {fmt_pct(pc.get('h1'))} | 6h {fmt_pct(pc.get('h6'))} | 24h {fmt_pct(pc.get('h24'))}\n"
-        f"   │\n"
-        f"   ⚖️ *DEX*        → {dex or '—'}\n"
-        f"   🌐 *Chain*      → {chain or '—'}\n"
-        f"   🔗 *Link*       → {url or '—'}"
-    )
-    await say(update, card, parse_mode="Markdown")
+    baseline, metric = _current_cap_from_pair(pair)
+    if baseline is None:
+        return await update.effective_chat.send_message(
+            "⚠️ Can't track this token yet (no marketCap/FDV available)."
+        )
 
+    key = (msg.chat_id, msg.message_id)
+    if key in TRACK_TASKS:
+        return  # already tracking this message
+
+    # save baseline + start watcher
+    BASELINES[key] = {"address": ca, "baseline": baseline, "metric": metric}
+    task = asyncio.create_task(
+        _watch_for_2x(context.bot, msg.chat_id, msg.message_id, ca, baseline, metric, name, symbol)
+    )
+    TRACK_TASKS[key] = task
+
+    # acknowledge (reply to the original CA post)
+    await context.bot.send_message(
+        chat_id=msg.chat_id,
+        text=f"✅ Tracking token — baseline {metric}: {fmt_usd(baseline)}",
+        reply_to_message_id=msg.message_id
+    )
+
+    logging.info(f"Now tracking {name} ({symbol}) {metric} @ {baseline} for 2x — {ca}")
+#WATCH HELPERS ___________________________________________________________________
+
+def _current_cap_from_pair(pair: dict) -> tuple[float | None, str]:
+    """
+    Return (value, metric_name). Prefer marketCap, fallback to fdv.
+    """
+    mcap = pair.get("marketCap")
+    if mcap:
+        return float(mcap), "marketCap"
+    fdv = pair.get("fdv")
+    if fdv:
+        return float(fdv), "fdv"
+    return None, ""
+
+async def _watch_for_2x(bot, chat_id: int, message_id: int, address: str, baseline: float, metric: str, name: str, symbol: str):
+    """
+    Poll DEXScreener until metric >= 2x baseline, then reply "2x!" to the original CA post.
+    """
+    start = asyncio.get_event_loop().time()
+    try:
+        while True:
+            # timeout
+            if asyncio.get_event_loop().time() - start > TIMEOUT_SECS:
+                break
+
+            data = get_dexscreener_for(address)
+            if not data or "pairs" not in data or not data["pairs"]:
+                await asyncio.sleep(POLL_SECS)
+                continue
+
+            pair = pick_best_pair(data["pairs"])
+            if not pair:
+                await asyncio.sleep(POLL_SECS)
+                continue
+
+            curr, _ = _current_cap_from_pair(pair)
+            if curr is None:
+                await asyncio.sleep(POLL_SECS)
+                continue
+
+            if curr >= 2 * baseline:
+                txt = f"🚀 *2x!* {name} ({symbol}) — {metric} from {fmt_usd(baseline)} to {fmt_usd(curr)}"
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=txt,
+                    parse_mode="Markdown",
+                    reply_to_message_id=message_id
+                )
+                break
+
+            await asyncio.sleep(POLL_SECS)
+    finally:
+        # cleanup
+        TRACK_TASKS.pop((chat_id, message_id), None)
+        BASELINES.pop((chat_id, message_id), None)
+#_______________________________END WATCH HELPERS________________________
 # ───────────────────────── Error handler ───────────────────────────
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
     log.exception("Unhandled error", exc_info=context.error)
